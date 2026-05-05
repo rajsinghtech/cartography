@@ -25,8 +25,8 @@ from cartography.intel.supply_chain import decode_attestation_blob_to_predicate
 from cartography.intel.supply_chain import extract_image_source_provenance
 from cartography.intel.supply_chain import extract_layers_from_oci_config
 from cartography.intel.supply_chain import extract_provenance_from_oci_config
-from cartography.models.gcp.artifact_registry.container_image import (
-    GCPArtifactRegistryContainerImageProvenanceSchema,
+from cartography.models.gcp.artifact_registry.image import (
+    GCPArtifactRegistryImageProvenanceSchema,
 )
 from cartography.models.gcp.artifact_registry.image_layer import (
     GCPArtifactRegistryImageLayerSchema,
@@ -321,8 +321,14 @@ async def _process_single_image(
     if not provenance.get("source_uri") and not diff_ids and not has_platform:
         return None, fetch_failed
 
+    digest = uri.split("@")[-1] if "@" in uri else manifest_digest
+    if not digest:
+        return None, fetch_failed
+
     result: dict[str, Any] = {
-        "id": name,
+        "digest": digest,
+        "type": "image",
+        "media_type": artifact.get("mediaType"),
     }
     if architecture is not None:
         result["architecture"] = architecture
@@ -449,6 +455,64 @@ def _build_layer_dicts(
     return list(layers_by_diff_id.values())
 
 
+PROVENANCE_UPDATE_FIELDS = (
+    "type",
+    "media_type",
+    "architecture",
+    "os",
+    "os_version",
+    "os_features",
+    "variant",
+    "layer_diff_ids",
+)
+
+PROVENANCE_SOURCE_FIELDS = (
+    "source_uri",
+    "source_revision",
+    "source_file",
+)
+
+PROVENANCE_FIELDS = (
+    *PROVENANCE_UPDATE_FIELDS,
+    *PROVENANCE_SOURCE_FIELDS,
+)
+
+
+def _is_blank_string(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() == ""
+
+
+def _merge_image_provenance_updates(
+    provenance_updates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged_by_digest: dict[str, dict[str, Any]] = {}
+    for update in provenance_updates:
+        digest = update.get("digest")
+        if not digest:
+            continue
+
+        merged = merged_by_digest.setdefault(
+            digest,
+            {"digest": digest, **dict.fromkeys(PROVENANCE_FIELDS)},
+        )
+        for field in PROVENANCE_UPDATE_FIELDS:
+            value = update.get(field)
+            if value is not None:
+                merged[field] = value
+
+        for field in PROVENANCE_SOURCE_FIELDS:
+            value = update.get(field)
+            existing_value = merged.get(field)
+            if (
+                (existing_value is None or _is_blank_string(existing_value))
+                and value is not None
+                and not _is_blank_string(value)
+            ):
+                merged[field] = value
+
+    return list(merged_by_digest.values())
+
+
 @timeit
 def load_image_provenance(
     neo4j_session: neo4j.Session,
@@ -459,13 +523,17 @@ def load_image_provenance(
     if not provenance_updates:
         return
 
+    merged_updates = _merge_image_provenance_updates(provenance_updates)
+    if not merged_updates:
+        return
+
     load_nodes_without_relationships(
         neo4j_session,
-        GCPArtifactRegistryContainerImageProvenanceSchema(),
-        provenance_updates,
+        GCPArtifactRegistryImageProvenanceSchema(),
+        merged_updates,
         batch_size=ARTIFACT_REGISTRY_LOAD_BATCH_SIZE,
         progress_description=(
-            f"Artifact Registry container image provenance updates for project {project_id}"
+            f"Artifact Registry image provenance updates for project {project_id}"
         ),
         lastupdated=update_tag,
         PROJECT_ID=project_id,
@@ -543,13 +611,17 @@ def sync(
     if enrichments:
         provenance_updates = [
             {
-                "id": e["id"],
+                "digest": e["digest"],
+                "type": e.get("type", "image"),
+                "media_type": e.get("media_type"),
                 "source_uri": e.get("source_uri"),
                 "source_revision": e.get("source_revision"),
                 "source_file": e.get("source_file"),
                 "layer_diff_ids": e.get("layer_diff_ids"),
                 "architecture": e.get("architecture"),
                 "os": e.get("os"),
+                "os_version": e.get("os_version"),
+                "os_features": e.get("os_features"),
                 "variant": e.get("variant"),
             }
             for e in enrichments

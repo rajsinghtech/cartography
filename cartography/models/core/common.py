@@ -44,6 +44,8 @@ class PropertyRef:
         fuzzy_and_ignore_case=False,
         one_to_many=False,
         preserve_existing=False,
+        preserve_existing_if_blank=False,
+        prefer_existing=False,
     ):
         """
         Initialize a PropertyRef instance.
@@ -70,6 +72,12 @@ class PropertyRef:
             preserve_existing (bool, optional): If True, node ingestion keeps the existing
                 graph property when the incoming value is null. Only has effect for node
                 property SET clauses. Defaults to False.
+            preserve_existing_if_blank (bool, optional): If True, node ingestion treats
+                incoming empty or whitespace-only strings as null for preserve_existing
+                handling. Only use this for string properties. Defaults to False.
+            prefer_existing (bool, optional): If True with preserve_existing, node ingestion
+                keeps the existing graph property whenever it is non-null and only fills it
+                from incoming data when the graph property is null. Defaults to False.
 
         Examples:
             Case-insensitive matching for GitHub usernames:
@@ -114,6 +122,8 @@ class PropertyRef:
         self.fuzzy_and_ignore_case = fuzzy_and_ignore_case
         self.one_to_many = one_to_many
         self.preserve_existing = preserve_existing
+        self.preserve_existing_if_blank = preserve_existing_if_blank
+        self.prefer_existing = prefer_existing
 
         if self.fuzzy_and_ignore_case and self.ignore_case:
             raise ValueError(
@@ -125,6 +135,15 @@ class PropertyRef:
             raise ValueError(
                 f'Error setting PropertyRef "{self.name}": one_to_many cannot be used together with '
                 "`ignore_case` or `fuzzy_and_ignore_case`.",
+            )
+
+        if (self.preserve_existing_if_blank or self.prefer_existing) and (
+            not self.preserve_existing
+        ):
+            raise ValueError(
+                f'Error setting PropertyRef "{self.name}": '
+                "`preserve_existing_if_blank` and `prefer_existing` require "
+                "`preserve_existing=True`.",
             )
 
     def _parameterize_name(self) -> str:

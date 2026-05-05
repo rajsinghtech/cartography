@@ -112,6 +112,26 @@ not use it for fields where a null value should intentionally clear stale data.
 This only preserves on `None`; empty strings, empty lists, `False`, and `0` are
 non-null incoming values and will overwrite the existing property.
 
+For string enrichment fields where empty or whitespace-only API values also mean
+"not observed this time", add `preserve_existing_if_blank=True`:
+
+```python
+source_uri: PropertyRef = PropertyRef(
+    "source_uri",
+    extra_index=True,
+    preserve_existing=True,
+    preserve_existing_if_blank=True,
+)
+```
+
+This uses Cypher `trim()` and is intended for string fields; if a non-string
+value reaches this path, the load should fail instead of silently coercing bad
+data. Blank existing graph values are also treated as absent. For digest-level
+provenance fields where the first non-null graph value should win, add
+`prefer_existing=True` as well. The loader will fill the property only when the
+existing graph value is null or blank, treating null, `""`, and whitespace as
+absent incoming values.
+
 #### Defining a node
 
 As an example of a `CartographyNodeSchema`, you can view our [EMRClusterSchema code](https://github.com/cartography-cncf/cartography/blob/e6ada9a1a741b83a34c1c3207515a1863debeeb9/cartography/intel/aws/emr.py#L106-L110):

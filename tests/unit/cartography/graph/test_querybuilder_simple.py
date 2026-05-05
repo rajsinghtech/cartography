@@ -1,9 +1,11 @@
+import pytest
+
 from cartography.graph.querybuilder import _build_node_properties_statement
 from cartography.graph.querybuilder import _get_module_from_schema
 from cartography.graph.querybuilder import build_ingestion_query
 from cartography.models.core.common import PropertyRef
-from cartography.models.gcp.artifact_registry.container_image import (
-    GCPArtifactRegistryContainerImageProvenanceSchema,
+from cartography.models.gcp.artifact_registry.image import (
+    GCPArtifactRegistryImageProvenanceSchema,
 )
 from cartography.version import get_cartography_version
 from tests.data.graph.querybuilder.sample_models.fake_emps_githubusers import (
@@ -18,6 +20,15 @@ from tests.data.graph.querybuilder.sample_models.simple_node import (
 )
 from tests.unit.cartography.graph.helpers import (
     remove_leading_whitespace_and_empty_lines,
+)
+
+SOURCE_URI_INCOMING_BLANK_AS_NULL = (
+    'CASE WHEN item.source_uri IS NULL OR trim(item.source_uri) = "" '
+    "THEN null ELSE item.source_uri END"
+)
+SOURCE_URI_EXISTING_BLANK_AS_NULL = (
+    'CASE WHEN i.source_uri IS NULL OR trim(i.source_uri) = "" '
+    "THEN null ELSE i.source_uri END"
 )
 
 
@@ -55,14 +66,70 @@ def test_build_node_properties_statement_preserves_existing_values():
     assert "i.source_uri = coalesce(item.source_uri, i.source_uri)" in query
 
 
+def test_build_node_properties_statement_preserves_existing_blank_values():
+    query = _build_node_properties_statement(
+        {
+            "id": PropertyRef("id"),
+            "source_uri": PropertyRef(
+                "source_uri",
+                preserve_existing=True,
+                preserve_existing_if_blank=True,
+            ),
+        },
+    )
+
+    assert (
+        "i.source_uri = coalesce("
+        f"{SOURCE_URI_INCOMING_BLANK_AS_NULL}, {SOURCE_URI_EXISTING_BLANK_AS_NULL}"
+        ")"
+    ) in query
+
+
+def test_build_node_properties_statement_prefers_existing_values():
+    query = _build_node_properties_statement(
+        {
+            "id": PropertyRef("id"),
+            "source_uri": PropertyRef(
+                "source_uri",
+                preserve_existing=True,
+                preserve_existing_if_blank=True,
+                prefer_existing=True,
+            ),
+        },
+    )
+
+    assert (
+        "i.source_uri = coalesce("
+        f"{SOURCE_URI_EXISTING_BLANK_AS_NULL}, {SOURCE_URI_INCOMING_BLANK_AS_NULL}"
+        ")"
+    ) in query
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"preserve_existing_if_blank": True},
+        {"prefer_existing": True},
+    ],
+)
+def test_propertyref_requires_preserve_existing_for_preserve_modes(kwargs):
+    with pytest.raises(ValueError, match="`preserve_existing=True`"):
+        PropertyRef("source_uri", **kwargs)
+
+
 def test_build_ingestion_query_preserves_existing_ontology_values():
-    query = build_ingestion_query(GCPArtifactRegistryContainerImageProvenanceSchema())
+    query = build_ingestion_query(GCPArtifactRegistryImageProvenanceSchema())
 
     assert "i.architecture = coalesce(item.architecture, i.architecture)" in query
     assert (
         "i._ont_architecture = coalesce(item.architecture, i._ont_architecture)"
         in query
     )
+    assert (
+        "i.source_uri = coalesce("
+        f"{SOURCE_URI_EXISTING_BLANK_AS_NULL}, {SOURCE_URI_INCOMING_BLANK_AS_NULL}"
+        ")"
+    ) in query
 
 
 def test_build_ingestion_query_with_sub_resource():

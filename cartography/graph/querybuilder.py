@@ -359,14 +359,32 @@ def _build_ontology_node_properties_statement(
     return ",\n" + ",\n".join(set_clauses)
 
 
+def _blank_as_null_expression(value: str) -> str:
+    return (
+        f'CASE WHEN {value} IS NULL OR trim({value}) = "" '
+        f"THEN null ELSE {value} END"
+    )
+
+
 def _build_property_assignment(
     node_property: str,
     property_ref: PropertyRef,
 ) -> str:
-    if property_ref.preserve_existing:
-        return f"i.{node_property} = coalesce({property_ref}, i.{node_property})"
+    incoming_value = str(property_ref)
+    if not property_ref.preserve_existing:
+        return f"i.{node_property} = {incoming_value}"
 
-    return f"i.{node_property} = {property_ref}"
+    existing_value = f"i.{node_property}"
+    if property_ref.preserve_existing_if_blank:
+        incoming_value = _blank_as_null_expression(incoming_value)
+        existing_value = _blank_as_null_expression(existing_value)
+
+    first_value, second_value = (
+        (existing_value, incoming_value)
+        if property_ref.prefer_existing
+        else (incoming_value, existing_value)
+    )
+    return f"i.{node_property} = coalesce({first_value}, {second_value})"
 
 
 def _build_node_properties_statement(
